@@ -247,7 +247,7 @@ public void RepositionFromShelf(
     };
 
     // HudShelf offsets are in screen pixels; VS's
-    // fixedAlignmentOffset expects "fixed" units (pre-GUI-scale).
+    // fixedOffset expects "fixed" units (pre-GUI-scale).
     var guiScale = GuiElement.scaled(1.0);
     if (guiScale <= 0) guiScale = 1.0;
 
