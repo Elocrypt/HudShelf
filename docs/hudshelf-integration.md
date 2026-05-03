@@ -357,7 +357,7 @@ same units as `capi.Render.FrameWidth`, `capi.Input.MouseX`, and
 `ElementBounds.OuterWidth`. Positive X is rightward; positive Y is
 downward, regardless of which anchor is selected.
 
-VS's `WithFixedAlignmentOffset` expects **"fixed" units** (logical
+VS's `WithFixedOffset` expects **"fixed" units** (logical
 pixels pre-GUI-scale). The conversion is:
 
 ```
@@ -399,7 +399,7 @@ reinstalled, persisted positions are restored automatically.
 ## Verifying your integration
 
 1. Build and deploy your mod + HudShelf.
-2. Enter edit mode (default <kbd>Ctrl</kbd>+<kbd>F10</kbd>).
+2. Enter edit mode (default <kbd>Ctrl</kbd>+<kbd>F8</kbd>).
    Your HUD should get a blue outline.
 3. Drag the HUD to a different zone. A green preview rectangle
    shows where it will land.
