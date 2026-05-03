@@ -252,8 +252,8 @@ public void RepositionFromShelf(
     if (guiScale <= 0) guiScale = 1.0;
 
     SingleComposer.Bounds.Alignment = area;
-    SingleComposer.Bounds.fixedAlignmentOffsetX = screenOffsetX / guiScale;
-    SingleComposer.Bounds.fixedAlignmentOffsetY = screenOffsetY / guiScale;
+    SingleComposer.Bounds.fixedOffsetX = screenOffsetX / guiScale;
+    SingleComposer.Bounds.fixedOffsetY = screenOffsetY / guiScale;
     SingleComposer.Bounds.CalcWorldBounds();
 }
 ```
