@@ -1,18 +1,32 @@
-# HudShelf
+<div align="center">
 
-A drag-to-position library for Vintage Story HUDs.
+# HUD Shelf
 
+**A drag-to-position library for [Vintage Story](https://www.vintagestory.at/) HUDs.**
+
+</div>
 HudShelf is an opt-in, client-side library mod. Mod authors take a
 dependency on it to give their HUDs drag-to-position support without
 re-implementing snapping, persistence, and edge clamping themselves.
 Mods that don't depend on HudShelf are completely unaffected by it.
+
+<div align="center">
+
+[![CI](https://github.com/Elocrypt/HudShelf/actions/workflows/ci.yml/badge.svg)](https://github.com/Elocrypt/HudShelf/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Elocrypt/HudShelf?include_prereleases)](https://github.com/Elocrypt/HudShelf/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![VS 1.22.0](https://img.shields.io/badge/Vintage%20Story-1.22.0-purple)](https://www.vintagestory.at/)
+
+</div>
+
+---
 
 > **Status: pre-1.0.** API may shift between minor versions. See
 > `CHANGELOG.md` for what changes between releases. After 1.0,
 > HudShelf follows strict semver - breaking changes only at major
 > versions.
 
-## What HudShelf does
+## What HUD Shelf does
 
 - A registration API mod authors call to opt their HUD in.
 - An edit mode triggered by a hotkey
