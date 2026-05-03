@@ -1,0 +1,16 @@
+# Build outputs
+bin/
+obj/
+*.user
+
+# IDEs
+.vs/
+.idea/
+.vscode/
+
+# Distribution artifacts
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db

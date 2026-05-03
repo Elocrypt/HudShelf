@@ -1,0 +1,15 @@
+{
+  "type": "code",
+  "modid": "hudshelf",
+  "name": "HudShelf",
+  "version": "0.3.0",
+  "description": "Drag-to-position library for HUDs from arbitrary mods. Opt-in API; mods that don't depend on HudShelf are unaffected by it.",
+  "authors": ["Elocrypt"],
+  "website": "https://github.com/Elocrypt/HudShelf",
+  "side": "Client",
+  "requiredOnClient": true,
+  "requiredOnServer": false,
+  "dependencies": {
+    "game": "1.22.0"
+  }
+}
