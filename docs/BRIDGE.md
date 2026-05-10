@@ -133,7 +133,7 @@ HUD ID.
 
 ## Edit mode
 
-HudShelf provides an edit-mode hotkey (default <kbd>Ctrl</kbd>+<kbd>F10</kbd>,
+HudShelf provides an edit-mode hotkey (default <kbd>Ctrl</kbd>+<kbd>F8</kbd>,
 user-rebindable in the standard VS controls UI under "HudShelf:
 toggle edit mode"). When edit mode is on, all registered HUDs get a
 visible outline and become draggable. Releasing the mouse button
