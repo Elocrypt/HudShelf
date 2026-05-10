@@ -18,17 +18,18 @@ namespace HudShelf.EditMode;
 /// overlay, anchor-point dots, distance lines) is v2.
 /// <para/>
 /// Render stage: <see cref="EnumRenderStage.Ortho"/>, render order
-/// <c>0.99</c>. That's just above the sleeping overlay (0.95) and
-/// below the GuiManager (1.0), which means we draw on top of all
-/// consumer HUDs but below the crosshair (1.02). Exactly where
-/// drag-preview should sit visually.
+/// <c>1.01</c>. That's above the GuiManager (1.0), which renders all
+/// registered dialogs, and below the crosshair (1.02). Rendering above
+/// the GuiManager ensures the outline is never buried beneath an opaque
+/// dialog background. The early-exit at the top of
+/// <see cref="OnRenderFrame"/> keeps cost zero when edit mode is off.
 /// </remarks>
 internal sealed class EditModeRenderer : IRenderer
 {
     /// <summary>
     /// Render order. See class remarks for the rationale.
     /// </summary>
-    public double RenderOrder => 0.99;
+    public double RenderOrder => 1.01;
 
     public int RenderRange => 1;
 
@@ -88,7 +89,44 @@ internal sealed class EditModeRenderer : IRenderer
 
         foreach (var hud in _api.RegisteredHuds.Values)
         {
-            if (!HitTester.TryGetHudRect(hud, screenW, screenH, out var l, out var t, out var w, out var h))
+            // Ask the consumer what their visible content size is. This is
+            // the authoritative size for the outline — consumers subtract
+            // dialog padding so the outline hugs the panel, not the full
+            // dialog footprint.
+            double bw, bh;
+            try { (bw, bh) = hud.Registration.GetBounds(); }
+            catch { continue; }
+
+            double l, t, w, h;
+
+            if (bw > 0 && bh > 0 &&
+                HitTester.TryGetHudRect(hud, screenW, screenH,
+                    out var cl, out var ct, out var cw, out var ch))
+            {
+                // Composer footprint is available. Use GetBounds() for size
+                // and center it within the footprint. For dialogs with
+                // symmetric padding (WithFixedPadding), (cw - bw) / 2 equals
+                // the padding in screen pixels, placing the outline exactly at
+                // the visible panel edge. For HUDs with no padding the formula
+                // reduces to (cl, ct), so nothing changes for them.
+                w = bw;
+                h = bh;
+                l = cl + (cw - bw) / 2.0;
+                t = ct + (ch - bh) / 2.0;
+            }
+            else if (bw > 0 && bh > 0)
+            {
+                // Composer bounds unavailable — derive position from the
+                // stored snap position instead.
+                var pos = hud.CurrentPosition;
+                var (anchorX, anchorY) = SnapMath.AnchorScreenPoint(pos.Anchor, screenW, screenH);
+                var (refX, refY) = SnapMath.HudReferencePoint(pos.Anchor, bw, bh);
+                l = anchorX + pos.OffsetX - refX;
+                t = anchorY + pos.OffsetY - refY;
+                w = bw;
+                h = bh;
+            }
+            else
             {
                 continue;
             }
@@ -97,7 +135,13 @@ internal sealed class EditModeRenderer : IRenderer
                 ? _hoverColor
                 : _outlineColor;
 
-            DrawRectOutline(l, t, w, h, thickness: 2, color);
+            // outlinePad extends the outline a few pixels outward so it
+            // remains visible on very thin HUDs (e.g. a 10px-tall stat bar).
+            const double outlinePad = 2.0;
+            DrawRectOutline(
+                l - outlinePad, t - outlinePad,
+                w + outlinePad * 2, h + outlinePad * 2,
+                thickness: 2, color);
         }
 
         // Drag preview: show where the dragged HUD would land if

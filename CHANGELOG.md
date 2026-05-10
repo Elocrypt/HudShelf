@@ -11,6 +11,35 @@ those are called out below when they happen.
 
 (Nothing parked.)
 
+## [0.3.1] — 2026/05/10
+
+Edit-mode outline fixes found during first-consumer integration
+(Hydrate or Diedrate and HUD Clock).
+
+### Fixed
+- **Outline render order** raised from `0.99` to `1.01`. VS's
+  `GuiManager` renders registered dialogs at `1.0`, so the previous
+  order buried outlines beneath any dialog with an opaque background.
+  The outline now reliably renders on top of all HUDs; the early-exit
+  when edit mode is off keeps cost zero outside edit mode.
+- **Outline dimensions** now derived from `GetBounds()` centered
+  within the composer footprint rather than taken directly from
+  `SingleComposer.Bounds.OuterWidth/Height`. For dialogs built with
+  `WithFixedPadding`, `OuterWidth/Height` includes the padding on
+  both sides, which pushed the outline visibly outside the panel
+  edge. The new formula `left = absX + (OuterWidth − bw) / 2`
+  places the outline at the panel boundary for any dialog with
+  symmetric padding without requiring HudShelf to know the padding
+  value.
+- **Thin-HUD outline** now has 2 px of outward padding so it remains
+  visible on very short elements such as stat bars (10 px `fixedHeight`
+  composes to ~15 px at 1.5× GUI scale — a 2 px border on 15 px
+  was nearly invisible without the pad).
+- **Composer-unavailable fallback** in the outline loop now derives
+  position from `CurrentPosition` + `GetBounds()` via SnapMath when
+  `TryGetHudRect` fails, so a HUD whose `SingleComposer` is null or
+  whose root element is a wrapper still gets an outline.
+
 ## [0.3.0] — 2026/05/03
 
 Stage 2: drag, edit mode, snap-to-anchor, edge clamping. With this
