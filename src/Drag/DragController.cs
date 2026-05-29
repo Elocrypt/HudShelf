@@ -28,6 +28,13 @@ internal sealed class DragController
     private readonly HudShelfApi _api;
     private readonly DragState _state;
 
+    // Where on the HUD the user clicked, relative to its top-left, at
+    // the moment the drag started. Kept here rather than in DragState
+    // because they're input-processing detail — the state machine only
+    // needs to know what HUD is being dragged and what the preview is.
+    private double _grabOffsetX;
+    private double _grabOffsetY;
+
     public DragController(ICoreClientAPI capi, HudShelfApi api, DragState state)
     {
         _capi = capi;
@@ -63,9 +70,26 @@ internal sealed class DragController
         var hit = HitTester.Find(e.X, e.Y, screenW, screenH, _api.RegisteredHuds);
         if (hit is null) return;
 
+        // Record where within the HUD the user clicked so the HUD
+        // follows the cursor without jumping. Fall back to (0,0) if
+        // the composer rect is unavailable (not yet composed); the HUD
+        // will jump slightly but that's better than swallowing the click.
+        if (HitTester.TryGetHudRect(hit, screenW, screenH,
+                out var hudLeft, out var hudTop, out _, out _))
+        {
+            _grabOffsetX = e.X - hudLeft;
+            _grabOffsetY = e.Y - hudTop;
+        }
+        else
+        {
+            _grabOffsetX = 0;
+            _grabOffsetY = 0;
+        }
+
         var w = SafeBoundsWidth(hit);
         var h = SafeBoundsHeight(hit);
-        var initialPreview = SnapMath.SnapToCursor(e.X, e.Y, w, h, screenW, screenH);
+        var initialPreview = SnapMath.SnapToCursor(
+            e.X, e.Y, w, h, screenW, screenH);
 
         _state.StartDrag(hit, initialPreview);
 
@@ -87,7 +111,8 @@ internal sealed class DragController
         var w = SafeBoundsWidth(hud);
         var h = SafeBoundsHeight(hud);
 
-        var preview = SnapMath.SnapToCursor(e.X, e.Y, w, h, screenW, screenH);
+        var preview = SnapMath.SnapToCursor(
+            e.X, e.Y, w, h, screenW, screenH);
         _state.UpdatePreview(preview);
 
         e.Handled = true;

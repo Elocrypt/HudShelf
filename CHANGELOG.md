@@ -9,7 +9,24 @@ those are called out below when they happen.
 
 ## [Unreleased]
 
-(Nothing parked.)
+### Fixed
+- **Drag no longer jumps on mousedown.** `SnapToCursor` now accepts the
+  cursor position within the HUD at drag-start (`grabX`/`grabY`).
+  The grabbed point stays under the cursor throughout the drag, so
+  the HUD follows naturally instead of snapping its anchor-reference
+  point to the cursor on click. The zone (anchor) is still determined
+  by where the cursor is; only the pixel offset relative to that anchor
+  changes. This also restores full free-placement: any pixel position
+  is reachable, not just the nine flush-anchor positions.
+- **Edge clamping now requires at least 50 % of each HUD dimension to
+  remain on-screen** (floored to 32 px for small HUDs). The previous
+  hard 32 px floor was adequate for small HUDs but allowed large HUDs
+  such as a full-width hotbar to be dragged until only a sliver was
+  visible. The 50 % rule is applied independently per axis — a wide
+  short HUD is constrained on width without being over-constrained on
+  height. This is a tightening of constraints: consumers that were
+  intentionally placing a large HUD so more than half of it overhangs
+  a screen edge will find the position clamped further than before.
 
 ## [0.3.1] — 2026/05/10
 

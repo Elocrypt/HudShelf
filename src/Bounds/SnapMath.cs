@@ -16,10 +16,20 @@ internal static class SnapMath
 {
     /// <summary>
     /// Minimum number of pixels a HUD's bounding box must overlap
-    /// the screen on each axis. Hard 32px per the v0.3 design lock;
-    /// percentage-based clamp is a v2 consideration.
+    /// the screen on each axis. Acts as a pixel floor for small HUDs;
+    /// large HUDs are governed by <see cref="MinEdgeOverlapFraction"/>
+    /// instead (whichever is larger wins).
     /// </summary>
     internal const double MinEdgeOverlapPx = 32.0;
+
+    /// <summary>
+    /// Minimum fraction of a HUD's size that must remain on-screen on
+    /// each axis. Applied independently per axis so a wide-but-short
+    /// HUD (e.g. a hotbar) is constrained correctly on both dimensions.
+    /// The effective minimum overlap per axis is
+    /// <c>max(MinEdgeOverlapPx, hudDimension * MinEdgeOverlapFraction)</c>.
+    /// </summary>
+    internal const double MinEdgeOverlapFraction = 0.5;
 
     /// <summary>
     /// Classify a cursor position into one of the nine snap zones.
@@ -162,7 +172,10 @@ internal static class SnapMath
 
     /// <summary>
     /// Clamp a position so the HUD's bounding rect overlaps the screen
-    /// by at least <see cref="MinEdgeOverlapPx"/> on each axis.
+    /// by at least half its size on each axis (floored to
+    /// <see cref="MinEdgeOverlapPx"/> for small HUDs). Overlap is
+    /// evaluated independently per axis using
+    /// <see cref="MinEdgeOverlapFraction"/>.
     /// </summary>
     /// <remarks>
     /// Computes the HUD's screen-space bounding rect from the position
@@ -171,11 +184,10 @@ internal static class SnapMath
     /// the user picked is preserved; only the offset moves.
     /// <para/>
     /// If the HUD is wider or taller than the screen, clamping does
-    /// the best it can — it ensures at least
-    /// <see cref="MinEdgeOverlapPx"/> overlap on each axis but the
-    /// HUD will extend off the opposite edge. That's the right
-    /// trade-off for an oversized HUD: the user can still see and
-    /// grab some of it.
+    /// the best it can — it ensures at least half-overlap on the
+    /// chosen-anchor side but the HUD will extend off the opposite
+    /// edge. That's the right trade-off for an oversized HUD: the
+    /// user can still see and grab some of it.
     /// </remarks>
     public static HudPosition ClampToScreen(
         HudPosition position,
@@ -191,14 +203,17 @@ internal static class SnapMath
         var hudLeft = anchorX + position.OffsetX - refX;
         var hudTop = anchorY + position.OffsetY - refY;
 
-        // Clamp so the HUD's rect overlaps the screen by at least MinEdgeOverlapPx.
-        // Right edge >= MinEdgeOverlapPx means hudLeft <= screenW - MinEdgeOverlapPx.
-        // Left edge <= screenW - MinEdgeOverlapPx means hudLeft >= MinEdgeOverlapPx - hudW.
-        // Symmetric for Y.
-        var minLeft = MinEdgeOverlapPx - hudW;
-        var maxLeft = screenW - MinEdgeOverlapPx;
-        var minTop = MinEdgeOverlapPx - hudH;
-        var maxTop = screenH - MinEdgeOverlapPx;
+        // Per-axis minimum overlap: at least half the HUD must be on-screen,
+        // floored to MinEdgeOverlapPx for HUDs smaller than 64px on that axis.
+        // Applied independently so a wide-short HUD (hotbar) isn't over-
+        // constrained on its short axis.
+        var minOverlapX = Math.Max(MinEdgeOverlapPx, hudW * MinEdgeOverlapFraction);
+        var minOverlapY = Math.Max(MinEdgeOverlapPx, hudH * MinEdgeOverlapFraction);
+
+        var minLeft = minOverlapX - hudW;
+        var maxLeft = screenW - minOverlapX;
+        var minTop  = minOverlapY - hudH;
+        var maxTop  = screenH - minOverlapY;
 
         // Defensive: if the HUD is wider/taller than the screen by a lot,
         // the min/max can cross. In that case, prefer min (left edge of

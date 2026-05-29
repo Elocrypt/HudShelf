@@ -87,34 +87,64 @@ public sealed class SnapMathTests
     // --- SnapToCursor ---
 
     [Fact]
-    public void SnapToCursor_CenterOfTopLeftZone_HasZeroOffsetFromAnchor()
+    public void SnapToCursor_GrabTopLeft_HudFollowsCursor()
     {
-        // Cursor at (100, 100) is inside the TopLeft zone (anchor at 0,0).
-        // Offset = cursor - anchor = (100, 100).
-        var pos = SnapMath.SnapToCursor(100, 100, hudW: 50, hudH: 30, ScreenW, ScreenH);
+        // Grab from top-left corner (0,0). HUD top-left lands at cursor.
+        // Cursor at (100,100) = TopLeft zone. Anchor at (0,0).
+        // refX/Y = (0,0) for TopLeft. offsetX = (100+0)-0 = 100, offsetY = 100.
+        var pos = SnapMath.SnapToCursor(100, 100,
+            hudW: 200, hudH: 100, ScreenW, ScreenH);
         Assert.Equal(HudAnchor.TopLeft, pos.Anchor);
         Assert.Equal(100, pos.OffsetX);
         Assert.Equal(100, pos.OffsetY);
     }
 
     [Fact]
-    public void SnapToCursor_TopRightZone_HasNegativeXOffset()
+    public void SnapToCursor_GrabCenter_CenterZone_ProducesZeroOffset()
     {
-        // Cursor in top-right zone. Anchor at (1920, 0). Offset = cursor - anchor.
-        var pos = SnapMath.SnapToCursor(1800, 50, hudW: 100, hudH: 50, ScreenW, ScreenH);
-        Assert.Equal(HudAnchor.TopRight, pos.Anchor);
-        Assert.Equal(1800 - 1920, pos.OffsetX); // -120
-        Assert.Equal(50 - 0, pos.OffsetY);
+        // Grab from center of a 200×100 HUD (grabX=100, grabY=50).
+        // Cursor at screen center (960,540) = Center zone.
+        // hudLeft = 960-100 = 860, hudTop = 540-50 = 490.
+        // Anchor (960,540), ref (100,50). offsetX = (860+100)-960 = 0.
+        var pos = SnapMath.SnapToCursor(960, 540,
+            hudW: 200, hudH: 100, ScreenW, ScreenH);
+        Assert.Equal(HudAnchor.Center, pos.Anchor);
+        Assert.Equal(0, pos.OffsetX);
+        Assert.Equal(0, pos.OffsetY);
     }
 
     [Fact]
-    public void SnapToCursor_BottomCenterZone_HasNegativeYOffset()
+    public void SnapToCursor_GrabOffsetShiftsPosition()
     {
-        // Cursor in bottom-center. Anchor at (960, 1080). Cursor (960, 1000).
-        var pos = SnapMath.SnapToCursor(960, 1000, hudW: 100, hudH: 50, ScreenW, ScreenH);
-        Assert.Equal(HudAnchor.BottomCenter, pos.Anchor);
-        Assert.Equal(0, pos.OffsetX);
-        Assert.Equal(1000 - 1080, pos.OffsetY); // -80
+        // Same cursor position, different grab point → different offset.
+        // Both should be in the same zone (TopLeft).
+        var grabFromTopLeft = SnapMath.SnapToCursor(100, 100,
+            hudW: 50, hudH: 30, ScreenW, ScreenH);
+        var grabFromCenter  = SnapMath.SnapToCursor(100, 100,
+            hudW: 50, hudH: 30, ScreenW, ScreenH);
+
+        Assert.Equal(HudAnchor.TopLeft, grabFromTopLeft.Anchor);
+        Assert.Equal(HudAnchor.TopLeft, grabFromCenter.Anchor);
+
+        // Grabbing from center places the HUD 25px left and 15px up of the
+        // grab-from-top-left case.
+        Assert.Equal(grabFromTopLeft.OffsetX - 25, grabFromCenter.OffsetX);
+        Assert.Equal(grabFromTopLeft.OffsetY - 15, grabFromCenter.OffsetY);
+    }
+
+    [Fact]
+    public void SnapToCursor_CursorInTopRightZone_AnchorIsTopRight()
+    {
+        // Zone classification still works with the grab-offset path.
+        // Cursor at (1800, 50) = TopRight zone. anchorX=1920, anchorY=0.
+        // Grab from top-left (0,0): hudLeft=1800, hudTop=50.
+        // refX=200, refY=0 for TopRight on 200×50 HUD.
+        // offsetX = (1800+200)-1920 = 80. offsetY = (50+0)-0 = 50.
+        var pos = SnapMath.SnapToCursor(1800, 50,
+            hudW: 200, hudH: 50, ScreenW, ScreenH);
+        Assert.Equal(HudAnchor.TopRight, pos.Anchor);
+        Assert.Equal(80,  pos.OffsetX);
+        Assert.Equal(50,  pos.OffsetY);
     }
 
     // --- ClampToScreen ---
@@ -132,14 +162,14 @@ public sealed class SnapMathTests
     {
         // TopLeft anchor with offset -300 puts the HUD's left edge at -300,
         // its right edge at -300 + 200 = -100. That's fully off-screen on the
-        // left. After clamping, the right edge must be at least 32px on-screen,
-        // so left must be >= 32 - 200 = -168.
+        // left. After clamping, at least half the HUD width (100px) must be
+        // on-screen, so left must be >= 100 - 200 = -100.
         var pos = new HudPosition(HudAnchor.TopLeft, -300, 100);
         var clamped = SnapMath.ClampToScreen(pos, hudW: 200, hudH: 100, ScreenW, ScreenH);
 
         Assert.Equal(HudAnchor.TopLeft, clamped.Anchor); // anchor preserved
-        // After clamp: HUD left = -168, so OffsetX = HUD left - anchor screen X + refX = -168 - 0 + 0 = -168.
-        Assert.Equal(-168, clamped.OffsetX);
+        // After clamp: HUD left = -100. OffsetX = -100 - 0 + 0 = -100.
+        Assert.Equal(-100, clamped.OffsetX);
         Assert.Equal(100, clamped.OffsetY); // Y wasn't off-screen, untouched.
     }
 
@@ -147,15 +177,15 @@ public sealed class SnapMathTests
     public void ClampToScreen_OffScreenRight_PullsBack()
     {
         // TopRight anchor with offset +300 puts HUD's left edge at
-        // 1920 - 200 + 300 = 2020 (off the right edge). Clamp so left
-        // edge <= 1920 - 32 = 1888.
+        // 1920 - 200 + 300 = 2020 (off the right edge). At least half
+        // the HUD width (100px) must be on-screen, so left <= 1920 - 100 = 1820.
         var pos = new HudPosition(HudAnchor.TopRight, 300, 50);
         var clamped = SnapMath.ClampToScreen(pos, hudW: 200, hudH: 100, ScreenW, ScreenH);
 
         Assert.Equal(HudAnchor.TopRight, clamped.Anchor);
-        // After clamp: HUD left = 1888, anchor screen X = 1920, refX = 200.
-        // OffsetX = HUD left + refX - anchorX = 1888 + 200 - 1920 = 168.
-        Assert.Equal(168, clamped.OffsetX);
+        // After clamp: HUD left = 1820, anchor screen X = 1920, refX = 200.
+        // OffsetX = 1820 + 200 - 1920 = 100.
+        Assert.Equal(100, clamped.OffsetX);
         Assert.Equal(50, clamped.OffsetY);
     }
 
@@ -163,16 +193,16 @@ public sealed class SnapMathTests
     public void ClampToScreen_OffScreenBottom_PullsBack()
     {
         // BottomLeft anchor with offset (0, +200) puts HUD top at
-        // 1080 - 100 + 200 = 1180 (fully off bottom). Clamp so top
-        // <= 1080 - 32 = 1048.
+        // 1080 - 100 + 200 = 1180 (fully off bottom). At least half
+        // the HUD height (50px) must be on-screen, so top <= 1080 - 50 = 1030.
         var pos = new HudPosition(HudAnchor.BottomLeft, 0, 200);
         var clamped = SnapMath.ClampToScreen(pos, hudW: 200, hudH: 100, ScreenW, ScreenH);
 
         Assert.Equal(HudAnchor.BottomLeft, clamped.Anchor);
-        // HUD top after clamp = 1048. anchorY = 1080, refY = 100.
-        // OffsetY = HUD top + refY - anchorY = 1048 + 100 - 1080 = 68.
+        // HUD top after clamp = 1030. anchorY = 1080, refY = 100.
+        // OffsetY = 1030 + 100 - 1080 = 50.
         Assert.Equal(0, clamped.OffsetX);
-        Assert.Equal(68, clamped.OffsetY);
+        Assert.Equal(50, clamped.OffsetY);
     }
 
     [Fact]
