@@ -15,7 +15,7 @@ Mods that don't depend on HudShelf are completely unaffected by it.
 [![CI](https://github.com/Elocrypt/HudShelf/actions/workflows/ci.yml/badge.svg)](https://github.com/Elocrypt/HudShelf/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Elocrypt/HudShelf?include_prereleases)](https://github.com/Elocrypt/HudShelf/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![VS 1.22.0](https://img.shields.io/badge/Vintage%20Story-1.22.0-purple)](https://www.vintagestory.at/)
+[![VS 1.22.7](https://img.shields.io/badge/Vintage%20Story-1.22.7-purple)](https://www.vintagestory.at/)
 
 </div>
 
@@ -34,8 +34,8 @@ Mods that don't depend on HudShelf are completely unaffected by it.
   in which registered HUDs become draggable.
 - Snap-to-anchor positioning at nine reference points (corners, edge
   midpoints, true center) with residual pixel offset.
-- Edge clamping so HUDs can't be lost off-screen (32px minimum
-  overlap on each axis).
+- Edge clamping so HUDs can't be lost off-screen (at least half of
+  each HUD dimension stays on-screen, minimum 32px).
 - Per-HUD position persistence across game sessions, keyed by stable
   HUD ID. File: `ModConfig/hudshelf/positions.json`.
 
@@ -43,7 +43,8 @@ Mods that don't depend on HudShelf are completely unaffected by it.
 
 - It does not position HUDs that haven't registered. No automatic
   capture of arbitrary dialogs.
-- It does not solve overlap between HUDs from different mods.
+- It does not prevent HUDs from different mods overlapping. When they
+  do, the smallest HUD under the cursor is the one you grab.
 - It does not provide alignment guides between HUDs.
 - It does not resize HUDs or position dialog-internal elements.
 - It does not run on the server.
@@ -94,11 +95,18 @@ mapping and any sign-convention details.
 
 Press <kbd>Ctrl</kbd>+<kbd>F8</kbd> (or your rebound key) to enter
 edit mode. Registered HUDs get a blue outline. Click and drag any
-HUD to reposition it; release to snap to the nearest of nine anchor
-zones. Press the hotkey again to exit edit mode.
+HUD to reposition it; the point you grabbed stays under the cursor,
+and on release the HUD anchors to whichever of nine screen zones the
+cursor is in. Press the hotkey again to exit edit mode.
 
-Positions persist across sessions. Window resizing automatically
-re-clamps positions to fit the new screen.
+While in edit mode:
+
+- **Right-click** a HUD to reset it to its default position.
+- **Arrow keys** nudge the HUD under the cursor (or the last one you
+  moved) by 1 px; hold <kbd>Shift</kbd> for 10 px.
+
+Positions persist across sessions. When the game window is resized,
+any HUD that would end up off-screen is pulled back in.
 
 <!-- COMPATIBILITY (hand-maintained - do not auto-overwrite) -->
 ## Compatibility

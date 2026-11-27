@@ -14,12 +14,38 @@ internal sealed class HudShelfApi : IHudShelfApi
 {
     private readonly Dictionary<string, RegisteredHud> _huds = new(StringComparer.Ordinal);
 
+    // Mirror of _huds.Values kept as a concrete List so per-frame
+    // iteration (hit-testing and outline drawing in edit mode) uses the
+    // struct enumerator. Iterating the dictionary through
+    // IReadOnlyDictionary boxes an enumerator on every frame.
+    private readonly List<RegisteredHud> _hudList = new();
+
     private readonly PositionStore _positionStore;
+    private readonly Func<(double Width, double Height)>? _screenSize;
     private bool _editModeActive;
 
-    public HudShelfApi(PositionStore positionStore)
+    /// <param name="positionStore">Persistence for HUD positions.</param>
+    /// <param name="screenSize">
+    /// Current frame size, used to clamp programmatic moves
+    /// (<see cref="IRegisteredHud.MoveBy"/>). Null skips clamping.
+    /// </param>
+    /// <param name="guiScale">
+    /// GUI scale at startup. Saved positions recorded at a different scale
+    /// are converted before any HUD registers. Null skips the conversion.
+    /// </param>
+    public HudShelfApi(
+        PositionStore positionStore,
+        Func<(double Width, double Height)>? screenSize = null,
+        double? guiScale = null)
     {
         _positionStore = positionStore;
+        _screenSize = screenSize;
+
+        if (guiScale is > 0)
+        {
+            _positionStore.RescaleTo(guiScale.Value);
+            _positionStore.Flush();
+        }
     }
 
     /// <inheritdoc />
@@ -72,9 +98,11 @@ internal sealed class HudShelfApi : IHudShelfApi
             registration,
             initialPosition,
             unregisterCallback: HandleUnregister,
-            positionStore: _positionStore);
+            positionStore: _positionStore,
+            screenSize: _screenSize);
 
         _huds[registration.Id] = handle;
+        _hudList.Add(handle);
 
         HudShelfLog.Notification(
             $"Registered HUD '{registration.Id}' at " +
@@ -148,16 +176,87 @@ internal sealed class HudShelfApi : IHudShelfApi
         if (_huds.TryGetValue(handle.Id, out var stored) && ReferenceEquals(stored, handle))
         {
             _huds.Remove(handle.Id);
+            _hudList.Remove(handle);
             HudShelfLog.Notification($"Unregistered HUD '{handle.Id}'");
         }
     }
 
     internal IReadOnlyDictionary<string, RegisteredHud> RegisteredHuds => _huds;
 
+    /// <summary>
+    /// Registered HUDs in registration order. Read-only by convention;
+    /// typed as <see cref="List{T}"/> so hot-path foreach doesn't allocate.
+    /// </summary>
+    internal List<RegisteredHud> HudList => _hudList;
+
     internal PositionStore PositionStore => _positionStore;
+
+    /// <summary>
+    /// Re-clamp every registered HUD against the given screen size and
+    /// write the result once. Used on edit-mode entry and when the game
+    /// window changes size.
+    /// </summary>
+    /// <param name="screenW">Frame width.</param>
+    /// <param name="screenH">Frame height.</param>
+    /// <param name="notifyAll">
+    /// Deliver <c>OnPositionChanged</c> to every HUD, moved or not. Set
+    /// after a resize so consumers that place HUDs at absolute pixels
+    /// re-resolve them against the new screen.
+    /// </param>
+    internal void ReclampAll(double screenW, double screenH, bool notifyAll = false)
+    {
+        if (screenW <= 0 || screenH <= 0) return;
+
+        // Indexed loop: SetPosition fires consumer callbacks, and a
+        // callback that unregisters would break a foreach.
+        for (var i = _hudList.Count - 1; i >= 0; i--)
+        {
+            if (i >= _hudList.Count) continue;
+            var hud = _hudList[i];
+            hud.SetPositionClamped(hud.CurrentPosition, screenW, screenH, saveNow: false, notifyIfUnchanged: notifyAll);
+        }
+
+        _positionStore.Flush();
+    }
+
+    /// <summary>
+    /// Adapt every position to a new GUI scale, then re-clamp. Offsets are
+    /// screen pixels, so they scale with the GUI; without this a HUD kept
+    /// its pixel offset while its neighbours grew or shrank around it
+    /// (e.g. stat bars overlapping or separating from the hotbar).
+    /// </summary>
+    internal void ApplyGuiScale(double oldScale, double newScale, double screenW, double screenH)
+    {
+        if (oldScale <= 0 || newScale <= 0 || Math.Abs(oldScale - newScale) < 1e-6) return;
+
+        var factor = newScale / oldScale;
+        _positionStore.RescaleTo(newScale);
+
+        for (var i = _hudList.Count - 1; i >= 0; i--)
+        {
+            if (i >= _hudList.Count) continue;
+            var hud = _hudList[i];
+            hud.ScaleDefault(factor);
+
+            // Stored positions were rescaled above; HUDs still on their
+            // registered default are scaled here.
+            var next = _positionStore.TryGet(hud.Id, out var stored)
+                ? stored
+                : hud.CurrentPosition with
+                {
+                    OffsetX = hud.CurrentPosition.OffsetX * factor,
+                    OffsetY = hud.CurrentPosition.OffsetY * factor,
+                };
+            hud.SetPosition(next, saveNow: false, notifyIfUnchanged: true);
+        }
+
+        ReclampAll(screenW, screenH);
+    }
 
     internal void DisposeAll()
     {
         _huds.Clear();
+        _hudList.Clear();
+        EditModeChanged = null;
     }
 }

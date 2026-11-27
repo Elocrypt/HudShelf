@@ -138,16 +138,19 @@ internal static class SnapMath
     }
 
     /// <summary>
-    /// Compute a snap position given the cursor, HUD size, and screen
-    /// size. The HUD's reference point (matching the chosen anchor)
-    /// will be placed at the cursor; offset is the delta between the
-    /// chosen anchor's screen point and that target.
+    /// Compute a snap position given the cursor, the grab point within
+    /// the HUD, HUD size, and screen size. The point the user grabbed
+    /// stays under the cursor; offset is the delta between the chosen
+    /// anchor's screen point and the HUD's matching reference point.
     /// </summary>
     /// <remarks>
-    /// In words: the user moved the HUD so its anchor-matching point
-    /// is now at the cursor. We pick the anchor based on which zone
-    /// the cursor is in, then compute how far from that anchor's
-    /// screen point the cursor sits.
+    /// The anchor is picked from the zone the cursor is in. The HUD's
+    /// top-left lands at <c>cursor - grab</c>, so any pixel position is
+    /// reachable regardless of which anchor is chosen.
+    /// <para/>
+    /// <paramref name="grabX"/>/<paramref name="grabY"/> are measured
+    /// from the HUD's top-left at drag start. Zero for both places the
+    /// HUD's top-left at the cursor.
     /// <para/>
     /// The result is NOT edge-clamped. Caller composes with
     /// <see cref="ClampToScreen"/> if clamping is desired.
@@ -155,17 +158,17 @@ internal static class SnapMath
     public static HudPosition SnapToCursor(
         double cursorX, double cursorY,
         double hudW, double hudH,
-        double screenW, double screenH)
+        double screenW, double screenH,
+        double grabX = 0, double grabY = 0)
     {
         var anchor = ClassifyCursorZone(cursorX, cursorY, screenW, screenH);
         var (anchorX, anchorY) = AnchorScreenPoint(anchor, screenW, screenH);
+        var (refX, refY) = HudReferencePoint(anchor, hudW, hudH);
 
-        // The HUD's top-left will land at (cursor - hudReference).
-        // The anchor refers to that same reference point on the HUD,
-        // so the offset from anchor screen point to HUD reference is
-        // simply (cursor - anchor).
-        var offsetX = cursorX - anchorX;
-        var offsetY = cursorY - anchorY;
+        // HUD top-left is (cursor - grab). The anchor aligns the HUD's
+        // reference point, so the offset is (top-left + ref) - anchor.
+        var offsetX = cursorX - grabX + refX - anchorX;
+        var offsetY = cursorY - grabY + refY - anchorY;
 
         return new HudPosition(anchor, offsetX, offsetY);
     }
@@ -232,4 +235,24 @@ internal static class SnapMath
 
         return new HudPosition(position.Anchor, clampedOffsetX, clampedOffsetY);
     }
+
+    /// <summary>
+    /// Screen-space top-left of a HUD of the given size placed at
+    /// <paramref name="position"/>. Inverse of the offset math in
+    /// <see cref="SnapToCursor"/>.
+    /// </summary>
+    public static (double Left, double Top) TopLeft(
+        HudPosition position, double hudW, double hudH, double screenW, double screenH)
+    {
+        var (anchorX, anchorY) = AnchorScreenPoint(position.Anchor, screenW, screenH);
+        var (refX, refY) = HudReferencePoint(position.Anchor, hudW, hudH);
+        return (anchorX + position.OffsetX - refX, anchorY + position.OffsetY - refY);
+    }
+
+    /// <summary>
+    /// Shift a position by a pixel delta, keeping its anchor. The result
+    /// is not clamped.
+    /// </summary>
+    public static HudPosition Nudge(HudPosition position, double dx, double dy) =>
+        position with { OffsetX = position.OffsetX + dx, OffsetY = position.OffsetY + dy };
 }

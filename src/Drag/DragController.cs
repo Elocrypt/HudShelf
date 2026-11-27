@@ -6,10 +6,11 @@ using Vintagestory.API.Common;
 namespace HudShelf.Drag;
 
 /// <summary>
-/// Handles mouse input during edit mode. Subscribes to the low-level
-/// <c>capi.Event.MouseDown/Move/Up</c> events; consumes them
-/// (sets <c>e.Handled = true</c>) only while in edit mode and only
-/// when the cursor is over a registered HUD or a drag is in progress.
+/// Handles input during edit mode: left-drag to move a HUD,
+/// right-click to reset it to its registered default, arrow keys to
+/// nudge it. Subscribes to the low-level <c>capi.Event</c> mouse and
+/// key events and consumes them (sets <c>Handled</c>) only while in
+/// edit mode and only when they act on a HUD.
 /// </summary>
 /// <remarks>
 /// Why low-level handlers and not a GuiDialog overlay: VS routes
@@ -20,10 +21,23 @@ namespace HudShelf.Drag;
 /// HudShelf, not to the consumer's HUD or to other dialogs.
 /// <para/>
 /// When edit mode is off, the handlers return immediately without
-/// touching <c>e.Handled</c>; events flow normally.
+/// touching <c>Handled</c>; events flow normally.
 /// </remarks>
 internal sealed class DragController
 {
+    /// <summary>Arrow-key nudge step in screen pixels.</summary>
+    internal const double NudgeStep = 1;
+
+    /// <summary>Arrow-key nudge step with Shift held.</summary>
+    internal const double NudgeStepLarge = 10;
+
+    /// <summary>
+    /// Delay before nudged positions are written to disk. Holding an
+    /// arrow key repeats KeyDown many times a second; this collapses
+    /// the burst into one write.
+    /// </summary>
+    private const int NudgeSaveDelayMs = 750;
+
     private readonly ICoreClientAPI _capi;
     private readonly HudShelfApi _api;
     private readonly DragState _state;
@@ -35,6 +49,13 @@ internal sealed class DragController
     private double _grabOffsetX;
     private double _grabOffsetY;
 
+    // Last HUD the user dragged or reset. Arrow keys act on the HUD
+    // under the cursor, falling back to this one so the user can nudge
+    // without keeping the mouse parked on a tiny HUD.
+    private RegisteredHud? _lastTouched;
+
+    private long _saveCallbackId;
+
     public DragController(ICoreClientAPI capi, HudShelfApi api, DragState state)
     {
         _capi = capi;
@@ -44,38 +65,52 @@ internal sealed class DragController
         _capi.Event.MouseDown += OnMouseDown;
         _capi.Event.MouseMove += OnMouseMove;
         _capi.Event.MouseUp += OnMouseUp;
+        _capi.Event.KeyDown += OnKeyDown;
     }
 
     /// <summary>
-    /// Detach event subscriptions. Called from the mod system's
-    /// Dispose path.
+    /// Detach event subscriptions and write any pending nudges. Called
+    /// from the mod system's Dispose path.
     /// </summary>
     public void Dispose()
     {
         _capi.Event.MouseDown -= OnMouseDown;
         _capi.Event.MouseMove -= OnMouseMove;
         _capi.Event.MouseUp -= OnMouseUp;
+        _capi.Event.KeyDown -= OnKeyDown;
+
+        CancelPendingSave();
+        _api.PositionStore.Flush();
+        _lastTouched = null;
     }
+
+    /// <summary>
+    /// Forget the last-touched HUD. Called on edit-mode exit so a stale
+    /// selection can't receive nudges in the next session.
+    /// </summary>
+    internal void ClearSelection() => _lastTouched = null;
 
     private void OnMouseDown(MouseEvent e)
     {
         if (_state.Phase != DragPhase.Browsing) return;
 
-        // Only left-click starts a drag. Right-click and other buttons
-        // should pass through normally — a future refinement might use
-        // right-click for "reset to default" but v1 keeps it simple.
+        if (e.Button == EnumMouseButton.Right)
+        {
+            HandleResetClick(e);
+            return;
+        }
+
+        // Only left-click starts a drag; other buttons pass through.
         if (e.Button != EnumMouseButton.Left) return;
 
         var (screenW, screenH) = ScreenSize();
-        var hit = HitTester.Find(e.X, e.Y, screenW, screenH, _api.RegisteredHuds);
+        var hit = HitTester.Find(e.X, e.Y, screenW, screenH, _api.HudList);
         if (hit is null) return;
 
         // Record where within the HUD the user clicked so the HUD
         // follows the cursor without jumping. Fall back to (0,0) if
-        // the composer rect is unavailable (not yet composed); the HUD
-        // will jump slightly but that's better than swallowing the click.
-        if (HitTester.TryGetHudRect(hit, screenW, screenH,
-                out var hudLeft, out var hudTop, out _, out _))
+        // the composer rect is unavailable (not yet composed).
+        if (HitTester.TryGetHudRect(hit, screenW, screenH, out var hudLeft, out var hudTop, out _, out _))
         {
             _grabOffsetX = e.X - hudLeft;
             _grabOffsetY = e.Y - hudTop;
@@ -86,33 +121,43 @@ internal sealed class DragController
             _grabOffsetY = 0;
         }
 
-        var w = SafeBoundsWidth(hit);
-        var h = SafeBoundsHeight(hit);
+        hit.TryGetLayoutSize(out var w, out var h);
         var initialPreview = SnapMath.SnapToCursor(
-            e.X, e.Y, w, h, screenW, screenH);
+            e.X, e.Y, w, h, screenW, screenH, _grabOffsetX, _grabOffsetY);
 
         _state.StartDrag(hit, initialPreview);
+        _lastTouched = hit;
 
         // Consume the click so it doesn't fall through to the consumer's
         // HUD (which might have its own mouse handlers).
         e.Handled = true;
     }
 
+    private void HandleResetClick(MouseEvent e)
+    {
+        var (screenW, screenH) = ScreenSize();
+        var hit = HitTester.Find(e.X, e.Y, screenW, screenH, _api.HudList);
+        if (hit is null) return;
+
+        hit.SetPositionClamped(hit.DefaultPosition, screenW, screenH);
+        _lastTouched = hit;
+
+        e.Handled = true;
+    }
+
     private void OnMouseMove(MouseEvent e)
     {
         // In Browsing we don't consume mouse-move events — the user
-        // might still be interacting with other dialogs (e.g. opening
-        // a context menu while edit mode is on). Only Dragging consumes.
+        // might still be interacting with other dialogs while edit mode
+        // is on. Only Dragging consumes.
         if (_state.Phase != DragPhase.Dragging) return;
-        if (_state.DraggedHud is null) return;
+        if (_state.DraggedHud is not { } hud) return;
 
         var (screenW, screenH) = ScreenSize();
-        var hud = _state.DraggedHud;
-        var w = SafeBoundsWidth(hud);
-        var h = SafeBoundsHeight(hud);
+        hud.TryGetLayoutSize(out var w, out var h);
 
         var preview = SnapMath.SnapToCursor(
-            e.X, e.Y, w, h, screenW, screenH);
+            e.X, e.Y, w, h, screenW, screenH, _grabOffsetX, _grabOffsetY);
         _state.UpdatePreview(preview);
 
         e.Handled = true;
@@ -129,29 +174,59 @@ internal sealed class DragController
         var (hud, candidate) = ended.Value;
         var (screenW, screenH) = ScreenSize();
 
-        // Apply with clamping. SetPositionClamped fires the consumer
-        // callback and persists. The preview rectangle the user saw
-        // and the final HUD position will match (both go through the
-        // same clamp), unless the HUD has somehow changed size between
-        // mouse-down and mouse-up — in which case the clamped final
-        // position is still correct for the actual HUD size.
+        // The preview went through the same clamp, so the final
+        // position matches what the user saw unless the HUD changed
+        // size mid-drag; then the clamp is still right for the new size.
         hud.SetPositionClamped(candidate, screenW, screenH);
 
         e.Handled = true;
     }
 
+    private void OnKeyDown(KeyEvent e)
+    {
+        if (_state.Phase != DragPhase.Browsing) return;
+
+        double dx = 0, dy = 0;
+        var step = e.ShiftPressed ? NudgeStepLarge : NudgeStep;
+        switch (e.KeyCode)
+        {
+            case (int)GlKeys.Left: dx = -step; break;
+            case (int)GlKeys.Right: dx = step; break;
+            case (int)GlKeys.Up: dy = -step; break;
+            case (int)GlKeys.Down: dy = step; break;
+            default: return;
+        }
+
+        var (screenW, screenH) = ScreenSize();
+        var target = HitTester.Find(_capi.Input.MouseX, _capi.Input.MouseY, screenW, screenH, _api.HudList);
+        if (target is null && _lastTouched is { IsUnregistered: false } last) target = last;
+        if (target is null) return;
+
+        target.SetPositionClamped(
+            SnapMath.Nudge(target.CurrentPosition, dx, dy), screenW, screenH, saveNow: false);
+        _lastTouched = target;
+        ScheduleSave();
+
+        e.Handled = true;
+    }
+
+    private void ScheduleSave()
+    {
+        CancelPendingSave();
+        _saveCallbackId = _capi.Event.RegisterCallback(_ =>
+        {
+            _saveCallbackId = 0;
+            _api.PositionStore.Flush();
+        }, NudgeSaveDelayMs, permittedWhilePaused: true);
+    }
+
+    private void CancelPendingSave()
+    {
+        if (_saveCallbackId == 0) return;
+        _capi.Event.UnregisterCallback(_saveCallbackId);
+        _saveCallbackId = 0;
+    }
+
     private (double W, double H) ScreenSize() =>
         (_capi.Render.FrameWidth, _capi.Render.FrameHeight);
-
-    private static double SafeBoundsWidth(RegisteredHud hud)
-    {
-        try { return hud.Registration.GetBounds().Width; }
-        catch { return 0; }
-    }
-
-    private static double SafeBoundsHeight(RegisteredHud hud)
-    {
-        try { return hud.Registration.GetBounds().Height; }
-        catch { return 0; }
-    }
 }

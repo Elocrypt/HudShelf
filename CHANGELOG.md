@@ -9,6 +9,81 @@ those are called out below when they happen.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026/11/27
+
+### Added
+- **Right-click to reset.** In edit mode, right-clicking a HUD moves it
+  back to its registered default position.
+- **Arrow-key nudge.** In edit mode, arrow keys move the HUD under the
+  cursor (or the last one dragged or reset) by 1 px, 10 px with Shift.
+  Nudges are written to disk once the burst ends, not per key repeat.
+- **`IRegisteredHud.MoveBy(dx, dy)`** moves a HUD programmatically
+  (clamped, persisted, delivered through `OnPositionChanged`). Lets a
+  consumer dock one HUD to another, e.g. HUD Shelf: Essentials keeping
+  the trash slot next to the hotbar. Additive; existing consumers are
+  unaffected.
+
+### Fixed
+- **Window resize re-clamps HUDs.** The README promised this, but
+  positions were only re-clamped on entering edit mode. HUDs are now
+  pulled back on-screen once the window settles at a new size (ignoring
+  minimized and mid-drag sizes, so a temporary shrink doesn't drag every
+  HUD inward).
+- **Padded HUDs land where the preview shows.** Snap and clamp math
+  used the consumer's content size (`GetBounds`), but `ApplyTo` aligns
+  the whole dialog including padding. Right- and bottom-anchored HUDs
+  with padding (HUD Clock) landed one padding-width off the preview.
+  Layout math now uses the composed dialog footprint; `GetBounds` is
+  only used for drawing the outline.
+- **HUDs without a single composer are hit-tested natively.** Vanilla
+  HUDs keep their composer under keys other than `"single"`, so
+  `HitTester` found no rect for them and HUD Shelf: Essentials had to
+  patch it with a reflection-based fallback on every hit test. HudShelf
+  now falls back to the registered size at the HUD's current position
+  itself.
+- **HUDs keep their layout when the GUI scale changes.** Offsets are
+  screen pixels, so after a scale change a HUD stayed the same number of
+  pixels from its anchor while everything around it grew or shrank
+  (stat bars overlapping or drifting away from the hotbar). Positions,
+  including registered defaults, are now converted by the scale ratio
+  when the setting changes, and `positions.json` records the scale it
+  was saved at (`guiScale`) so a scale change between sessions is
+  converted on load. Files without it are taken as the current scale.
+- **Consumers re-apply after a resize.** After the window settles at a
+  new size every HUD gets `OnPositionChanged`, moved or not, so mods
+  that place HUDs at absolute pixels re-resolve them for the new screen.
+- **Overlapping HUDs.** The smallest HUD under the cursor is now the one
+  grabbed, so a small HUD sitting on a large one can always be moved.
+- **Edit-mode hotkey no longer flickers when held.** Key repeat re-fired
+  the toggle while <kbd>Ctrl</kbd>+<kbd>F8</kbd> was held.
+- **Drag now actually follows the grab point.** The 0.3.2 notes below
+  described this, but `DragController` measured the grab offset and
+  never passed it to `SnapMath.SnapToCursor`, so 0.3.2 still snapped
+  the HUD's anchor point to the cursor. `SnapToCursor` now takes
+  `grabX`/`grabY` and the drag path supplies them.
+- **Texture leak.** The edit-mode outline texture was never disposed, so
+  every world join leaked one GL texture and logged
+  `Texture with texture id ... is leaking memory`. The renderer now owns
+  the texture and disposes it on unload.
+- **Release zip contents.** `modicon.png` was packaged twice (root and
+  `resources/modicon/`). `package.ps1` now reads `modinfo.json` from the
+  repo root instead of `bin/`, and refuses to package if the DLL's file
+  version doesn't match `modinfo.json`.
+
+### Changed
+- Built and tested against Vintage Story 1.22.7; `modinfo.json` game
+  dependency raised to 1.22.7.
+- Edit-mode hit-testing and outline drawing no longer allocate per
+  frame (the HUD list was enumerated through an interface, boxing the
+  enumerator every frame).
+- Re-clamping all HUDs (edit-mode entry, resize) writes `positions.json`
+  once instead of once per HUD.
+- `EditModeChanged` subscribers are released when HudShelf unloads.
+- `IHudShelfApi` docs listed the edit-mode hotkey as Ctrl+F10; it is
+  Ctrl+F8.
+
+## [0.3.2] — 2026/05/29
+
 ### Fixed
 - **Drag no longer jumps on mousedown.** `SnapToCursor` now accepts the
   cursor position within the HUD at drag-start (`grabX`/`grabY`).

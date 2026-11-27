@@ -5,6 +5,7 @@ using HudShelf.Internal;
 using HudShelf.Persistence;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 
 namespace HudShelf;
 
@@ -55,7 +56,10 @@ public sealed class HudShelfModSystem : ModSystem
 
         var positionStore = new PositionStore(positionsPath);
 
-        _api = new HudShelfApi(positionStore);
+        _api = new HudShelfApi(
+            positionStore,
+            screenSize: () => (capi.Render.FrameWidth, capi.Render.FrameHeight),
+            guiScale: RuntimeEnv.GUIScale);
 
         // Edit-mode infrastructure. Constructed in dependency order:
         // state holder, input controller (subscribes to mouse events),
@@ -67,7 +71,7 @@ public sealed class HudShelfModSystem : ModSystem
         _editModeRenderer = new EditModeRenderer(capi, _api, _dragState);
         capi.Event.RegisterRenderer(_editModeRenderer, EnumRenderStage.Ortho, "hudshelf-editmode");
 
-        _editModeController = new EditModeController(capi, _api, _dragState);
+        _editModeController = new EditModeController(capi, _api, _dragState, _dragController);
 
         HudShelfLog.Notification(
             $"HudShelf ready. Positions file: {positionsPath}. " +

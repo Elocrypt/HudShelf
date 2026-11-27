@@ -25,6 +25,18 @@ public interface IRegisteredHud
     HudPosition CurrentPosition { get; }
 
     /// <summary>
+    /// Move this HUD by a screen-pixel delta, keeping its anchor. The
+    /// result is clamped to the screen, persisted, and delivered through
+    /// <see cref="HudRegistration.OnPositionChanged"/> like a drag.
+    /// </summary>
+    /// <remarks>
+    /// For HUDs that should follow another HUD (e.g. a widget docked to
+    /// the hotbar): apply the leader's movement to the follower. No-op
+    /// after <see cref="Unregister"/>.
+    /// </remarks>
+    void MoveBy(double dx, double dy);
+
+    /// <summary>
     /// Removes this HUD from HudShelf. Idempotent: subsequent calls are
     /// no-ops. After unregistering, the handle is inert — its
     /// properties keep their last values but no further callbacks fire.

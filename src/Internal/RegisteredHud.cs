@@ -17,18 +17,21 @@ internal sealed class RegisteredHud : IRegisteredHud
 {
     private readonly Action<RegisteredHud> _unregisterCallback;
     private readonly PositionStore? _positionStore;
+    private readonly Func<(double Width, double Height)>? _screenSize;
     private bool _unregistered;
 
     public RegisteredHud(
         HudRegistration registration,
         HudPosition initialPosition,
         Action<RegisteredHud> unregisterCallback,
-        PositionStore? positionStore)
+        PositionStore? positionStore,
+        Func<(double Width, double Height)>? screenSize = null)
     {
         Registration = registration;
         CurrentPosition = initialPosition;
         _unregisterCallback = unregisterCallback;
         _positionStore = positionStore;
+        _screenSize = screenSize;
     }
 
     public HudRegistration Registration { get; }
@@ -38,6 +41,35 @@ internal sealed class RegisteredHud : IRegisteredHud
     public HudPosition CurrentPosition { get; private set; }
 
     public bool IsUnregistered => _unregistered;
+
+    // Registration defaults are screen pixels at the GUI scale in effect
+    // when the HUD registered; this tracks later scale changes.
+    private double _defaultScale = 1.0;
+
+    /// <summary>The registered default position, at the current GUI scale.</summary>
+    internal HudPosition DefaultPosition => new(
+        Registration.DefaultAnchor,
+        Registration.DefaultOffsetX * _defaultScale,
+        Registration.DefaultOffsetY * _defaultScale);
+
+    /// <summary>Account for a GUI scale change in <see cref="DefaultPosition"/>.</summary>
+    internal void ScaleDefault(double factor) => _defaultScale *= factor;
+
+    /// <inheritdoc />
+    public void MoveBy(double dx, double dy)
+    {
+        if (_unregistered) return;
+
+        var next = SnapMath.Nudge(CurrentPosition, dx, dy);
+        if (_screenSize is null)
+        {
+            SetPosition(next);
+            return;
+        }
+
+        var (w, h) = _screenSize();
+        SetPositionClamped(next, w, h);
+    }
 
     public void Unregister()
     {
@@ -53,6 +85,17 @@ internal sealed class RegisteredHud : IRegisteredHud
     /// this during registration — the consumer's callback may not be
     /// ready while their <c>StartClientSide</c> is still executing.
     /// </summary>
+    /// <param name="next">The new position.</param>
+    /// <param name="saveNow">
+    /// False defers the file write until <see cref="PositionStore.Flush"/>.
+    /// Used for bursts (keyboard nudges, re-clamping all HUDs).
+    /// </param>
+    /// <param name="notifyIfUnchanged">
+    /// Fire the consumer callback even when the position is unchanged.
+    /// Used after a window resize or GUI-scale change: the anchor+offset
+    /// is the same, but the screen pixel it resolves to has moved, and
+    /// consumers that place their HUD at an absolute pixel must re-apply.
+    /// </param>
     /// <remarks>
     /// Order is intentional: persist first, callback second. If
     /// persistence fails, the consumer still gets the in-session
@@ -61,20 +104,26 @@ internal sealed class RegisteredHud : IRegisteredHud
     /// after persistence means the consumer can rely on
     /// <c>CurrentPosition</c> reflecting the persisted state.
     /// </remarks>
-    internal void SetPosition(HudPosition next)
+    internal void SetPosition(HudPosition next, bool saveNow = true, bool notifyIfUnchanged = false)
     {
-        if (CurrentPosition == next) return;
+        if (_unregistered) return;
 
-        CurrentPosition = next;
+        var changed = CurrentPosition != next;
+        if (!changed && !notifyIfUnchanged) return;
 
-        try
+        if (changed)
         {
-            _positionStore?.Set(Id, next);
-        }
-        catch (Exception ex)
-        {
-            HudShelfLog.Warning(
-                $"Unexpected error persisting position for HUD '{Id}': {ex}");
+            CurrentPosition = next;
+
+            try
+            {
+                _positionStore?.Set(Id, next, saveNow);
+            }
+            catch (Exception ex)
+            {
+                HudShelfLog.Warning(
+                    $"Unexpected error persisting position for HUD '{Id}': {ex}");
+            }
         }
 
         try
@@ -89,38 +138,67 @@ internal sealed class RegisteredHud : IRegisteredHud
     }
 
     /// <summary>
-    /// Convenience for callers that want to clamp a candidate position
-    /// against the current screen size before applying it. Used by the
-    /// drag completion path and by edit-mode-entry re-clamping.
+    /// Clamp a candidate position against the screen, then apply it.
+    /// Used by drag completion, keyboard nudges, reset, and re-clamping
+    /// on edit-mode entry or window resize.
     /// </summary>
     /// <remarks>
-    /// If <c>GetBounds</c> reports zero size (HUD not composed yet),
-    /// clamping is skipped — there's nothing meaningful to clamp
-    /// against. The unclamped position is still applied so the next
-    /// frame's compose can show the HUD wherever it ended up; the
-    /// next position update will clamp normally.
+    /// If the layout size is unknown (HUD not composed yet), clamping
+    /// is skipped and the candidate is applied as-is; the next position
+    /// update will clamp normally.
     /// </remarks>
-    internal void SetPositionClamped(HudPosition candidate, double screenW, double screenH)
+    internal void SetPositionClamped(
+        HudPosition candidate, double screenW, double screenH,
+        bool saveNow = true, bool notifyIfUnchanged = false)
     {
-        double w, h;
+        if (!TryGetLayoutSize(out var w, out var h))
+        {
+            SetPosition(candidate, saveNow, notifyIfUnchanged);
+            return;
+        }
+
+        SetPosition(SnapMath.ClampToScreen(candidate, w, h, screenW, screenH), saveNow, notifyIfUnchanged);
+    }
+
+    /// <summary>
+    /// The size VS aligns to the anchor: the composer's outer footprint,
+    /// padding included. Falls back to <see cref="HudRegistration.GetBounds"/>
+    /// when the composer isn't available.
+    /// </summary>
+    /// <remarks>
+    /// Snap and clamp math must use this, not <c>GetBounds</c>. Consumers
+    /// may return a content size that excludes dialog padding (so the
+    /// outline hugs the panel), but <c>ApplyTo</c> aligns the whole
+    /// dialog. Using the content size put right- and bottom-anchored
+    /// padded HUDs one padding-width away from the drag preview.
+    /// </remarks>
+    internal bool TryGetLayoutSize(out double width, out double height)
+    {
+        if (HitTester.TryGetComposerRect(this, out _, out _, out width, out height))
+        {
+            return true;
+        }
+
+        return TryGetContentSize(out width, out height);
+    }
+
+    /// <summary>
+    /// The consumer-reported visible size (<see cref="HudRegistration.GetBounds"/>).
+    /// Used for drawing outlines. False if the consumer throws or reports
+    /// a non-positive size.
+    /// </summary>
+    internal bool TryGetContentSize(out double width, out double height)
+    {
         try
         {
-            (w, h) = Registration.GetBounds();
+            (width, height) = Registration.GetBounds();
         }
         catch
         {
-            // Treat as un-clampable; apply candidate as-is.
-            SetPosition(candidate);
-            return;
+            width = height = 0;
+            return false;
         }
 
-        if (w <= 0 || h <= 0)
-        {
-            SetPosition(candidate);
-            return;
-        }
-
-        var clamped = SnapMath.ClampToScreen(candidate, w, h, screenW, screenH);
-        SetPosition(clamped);
+        return width > 0 && height > 0;
     }
 }

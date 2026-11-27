@@ -73,10 +73,17 @@ public sealed class HudRegistration
 
     /// <summary>
     /// Invoked after HudShelf updates this HUD's position — drag
-    /// completion, edit-mode reset, or a future programmatic API. Not
-    /// invoked synchronously during <see cref="IHudShelfApi.Register"/>;
+    /// completion, keyboard nudge, edit-mode reset, re-clamping, GUI-scale
+    /// conversion, or <see cref="IRegisteredHud.MoveBy"/>. Not invoked
+    /// synchronously during <see cref="IHudShelfApi.Register"/>;
     /// read <see cref="IRegisteredHud.CurrentPosition"/> for the
     /// initial value, then rely on this callback for updates.
     /// </summary>
+    /// <remarks>
+    /// Also invoked with an unchanged position after the game window
+    /// settles at a new size, so consumers that convert the position to
+    /// absolute pixels can re-resolve it. Applying via
+    /// <see cref="HudShelfExtensions.ApplyTo"/> handles both cases.
+    /// </remarks>
     public Action<HudPosition>? OnPositionChanged { get; init; }
 }

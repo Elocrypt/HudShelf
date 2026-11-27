@@ -5,7 +5,7 @@
 
     <AssemblyName>HudShelf</AssemblyName>
     <RootNamespace>HudShelf</RootNamespace>
-    <Version>0.3.1</Version>
+    <Version>0.3.3</Version>
 
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
@@ -24,7 +24,7 @@
 
   <ItemGroup>
     <None Include="modinfo.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="resources\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="modicon.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('modicon.png')" />
   </ItemGroup>
 
   <ItemGroup>
@@ -34,5 +34,23 @@
   <ItemGroup>
     <Compile Remove="tests\**" />
   </ItemGroup>
+
+  <!--
+    Dev-time convenience: after a successful build, copy the ready-to-load mod into
+    $(VintagestoryData)\Mods\HudShelf so the next game launch picks it up.
+    Skipped in CI and release packaging via /p:DeployMod=false.
+  -->
+  <Target Name="DeployToVintagestoryMods" AfterTargets="Build"
+          Condition="'$(DeployMod)' != 'false' AND Exists('$(VintagestoryData)')">
+    <PropertyGroup>
+      <DeployPath>$(VintagestoryData)\Mods\$(AssemblyName)</DeployPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_DeployFiles Include="$(OutputPath)HudShelf.dll;$(OutputPath)modinfo.json;$(OutputPath)modicon.png" />
+    </ItemGroup>
+    <MakeDir Directories="$(DeployPath)" />
+    <Copy SourceFiles="@(_DeployFiles)" DestinationFolder="$(DeployPath)" SkipUnchangedFiles="true" />
+    <Message Text="[HudShelf] Deployed to $(DeployPath)" Importance="high" />
+  </Target>
 
 </Project>

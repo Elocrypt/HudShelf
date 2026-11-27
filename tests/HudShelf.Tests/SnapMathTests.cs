@@ -107,7 +107,7 @@ public sealed class SnapMathTests
         // hudLeft = 960-100 = 860, hudTop = 540-50 = 490.
         // Anchor (960,540), ref (100,50). offsetX = (860+100)-960 = 0.
         var pos = SnapMath.SnapToCursor(960, 540,
-            hudW: 200, hudH: 100, ScreenW, ScreenH);
+            hudW: 200, hudH: 100, ScreenW, ScreenH, grabX: 100, grabY: 50);
         Assert.Equal(HudAnchor.Center, pos.Anchor);
         Assert.Equal(0, pos.OffsetX);
         Assert.Equal(0, pos.OffsetY);
@@ -121,7 +121,7 @@ public sealed class SnapMathTests
         var grabFromTopLeft = SnapMath.SnapToCursor(100, 100,
             hudW: 50, hudH: 30, ScreenW, ScreenH);
         var grabFromCenter  = SnapMath.SnapToCursor(100, 100,
-            hudW: 50, hudH: 30, ScreenW, ScreenH);
+            hudW: 50, hudH: 30, ScreenW, ScreenH, grabX: 25, grabY: 15);
 
         Assert.Equal(HudAnchor.TopLeft, grabFromTopLeft.Anchor);
         Assert.Equal(HudAnchor.TopLeft, grabFromCenter.Anchor);
@@ -231,5 +231,29 @@ public sealed class SnapMathTests
         // HUD at (0,0) with TopLeft anchor: left edge is 0, which is
         // inside the valid range [-2968, 1888]. Clamping doesn't move it.
         Assert.Equal(0, clamped.OffsetX);
+    }
+
+    // --- TopLeft / Nudge ---
+
+    [Fact]
+    public void TopLeft_InvertsSnapToCursor()
+    {
+        // Grabbing at (30,10) and dropping with the cursor at (1700,1000)
+        // must put the HUD's top-left at cursor - grab for any anchor.
+        var pos = SnapMath.SnapToCursor(1700, 1000,
+            hudW: 200, hudH: 50, ScreenW, ScreenH, grabX: 30, grabY: 10);
+        var (left, top) = SnapMath.TopLeft(pos, 200, 50, ScreenW, ScreenH);
+
+        Assert.Equal(HudAnchor.BottomRight, pos.Anchor);
+        Assert.Equal(1670, left, 6);
+        Assert.Equal(990, top, 6);
+    }
+
+    [Fact]
+    public void Nudge_KeepsAnchorAndShiftsOffset()
+    {
+        var pos = new HudPosition(HudAnchor.CenterRight, -10, 4);
+        var nudged = SnapMath.Nudge(pos, 1, -10);
+        Assert.Equal(new HudPosition(HudAnchor.CenterRight, -9, -6), nudged);
     }
 }

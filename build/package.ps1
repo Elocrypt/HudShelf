@@ -23,24 +23,34 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $binDir = Join-Path $repoRoot "bin/$Configuration"
 $distDir = Join-Path $repoRoot "build/dist"
 
-# Read version from modinfo.json if not provided.
+# modinfo.json is read from the repo root, not bin/. The bin copy is
+# only refreshed on build, so packaging right after a version bump
+# would otherwise ship the previous version's modinfo.
+$modinfoPath = Join-Path $repoRoot "modinfo.json"
+$modinfo = Get-Content $modinfoPath -Raw | ConvertFrom-Json
+
 if (-not $Version) {
-    $modinfo = Get-Content (Join-Path $repoRoot "modinfo.json") -Raw | ConvertFrom-Json
     $Version = $modinfo.version
     Write-Host "Version from modinfo.json: $Version"
+}
+elseif ($Version -ne $modinfo.version) {
+    Write-Error "Requested version '$Version' does not match modinfo.json version '$($modinfo.version)'."
+    exit 1
 }
 
 # Verify the build output exists.
 $dllPath = Join-Path $binDir "HudShelf.dll"
-$modinfoPath = Join-Path $binDir "modinfo.json"
 
 if (-not (Test-Path $dllPath)) {
     Write-Error "Build output not found at '$dllPath'. Run 'dotnet build -c $Configuration' first."
     exit 1
 }
 
-if (-not (Test-Path $modinfoPath)) {
-    Write-Error "modinfo.json not found at '$modinfoPath'. Check CopyToOutputDirectory in csproj."
+# Refuse to package a stale DLL. FileVersion comes from <Version> in
+# HudShelf.csproj (x.y.z -> x.y.z.0).
+$dllVersion = (Get-Item $dllPath).VersionInfo.FileVersion
+if ($dllVersion -ne "$Version.0") {
+    Write-Error "HudShelf.dll FileVersion is '$dllVersion', expected '$Version.0'. Bump <Version> in HudShelf.csproj and rebuild."
     exit 1
 }
 
@@ -64,12 +74,6 @@ Copy-Item $modinfoPath $modDir
 $modiconSrc = Join-Path $repoRoot "modicon.png"
 if (Test-Path $modiconSrc) {
     Copy-Item $modiconSrc $modDir
-}
-
-# Copy resources if they exist.
-$resourcesSrc = Join-Path $binDir "resources"
-if (Test-Path $resourcesSrc) {
-    Copy-Item -Recurse $resourcesSrc $modDir
 }
 
 # Create the zip.

@@ -10,6 +10,8 @@ obj/
 
 # Distribution artifacts
 *.zip
+build/dist/
+build/stage/
 
 # OS
 .DS_Store

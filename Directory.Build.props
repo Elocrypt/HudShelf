@@ -9,10 +9,19 @@
   -->
   <PropertyGroup>
     <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(VINTAGE_STORY)' != ''">$(VINTAGE_STORY)</VintagestoryDir>
-    <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(OS)' == 'Windows_NT'">F:\VintageStory\Client_v1.22.1\Vintagestory</VintagestoryDir>
+    <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(OS)' == 'Windows_NT'">F:\VintageStory\Client_v1.22.7\Vintagestory</VintagestoryDir>
     <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(OS)' != 'Windows_NT'">$(HOME)/.local/share/Vintagestory</VintagestoryDir>
   </PropertyGroup>
 
+  <!--
+    Resolve the Vintage Story user data directory (where Mods/, ModConfig/, Saves/ live).
+    Order of precedence:
+      1. Per-call / IDE-provided VintagestoryData property (highest).
+      2. VINTAGE_STORY_DATA environment variable.
+      3. Fallback on Windows: '$(VintagestoryDir)\v', the portable data folder used by the
+         dev install (launched with the datapath argument). On Linux, the conventional
+         ~/.config/VintagestoryData.
+  -->
   <PropertyGroup>
     <VintagestoryData Condition="'$(VintagestoryData)' == '' AND '$(VINTAGE_STORY_DATA)' != ''">$(VINTAGE_STORY_DATA)</VintagestoryData>
     <VintagestoryData Condition="'$(VintagestoryData)' == '' AND '$(OS)' == 'Windows_NT'">$(VintagestoryDir)\v</VintagestoryData>

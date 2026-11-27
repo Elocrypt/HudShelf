@@ -31,12 +31,19 @@ internal sealed class EditModeController
     private readonly ICoreClientAPI _capi;
     private readonly HudShelfApi _api;
     private readonly DragState _state;
+    private readonly DragController _drag;
 
-    public EditModeController(ICoreClientAPI capi, HudShelfApi api, DragState state)
+    // True between the hotkey's press and the matching key release.
+    // OS key repeat re-fires the hotkey handler while the key is held,
+    // which would toggle edit mode on and off repeatedly.
+    private bool _hotkeyHeld;
+
+    public EditModeController(ICoreClientAPI capi, HudShelfApi api, DragState state, DragController drag)
     {
         _capi = capi;
         _api = api;
         _state = state;
+        _drag = drag;
 
         // Default: F8 with Ctrl modifier. Users rebind via the
         // standard VS controls UI.
@@ -50,6 +57,7 @@ internal sealed class EditModeController
             shiftPressed: false);
 
         _capi.Input.SetHotKeyHandler(HotkeyCode, OnHotkeyPressed);
+        _capi.Event.KeyUp += OnKeyUp;
     }
 
     /// <summary>
@@ -63,12 +71,26 @@ internal sealed class EditModeController
         // Set a no-op handler so any latent hotkey press during
         // shutdown doesn't reach our (about to be torn down) state.
         _capi.Input.SetHotKeyHandler(HotkeyCode, _ => false);
+        _capi.Event.KeyUp -= OnKeyUp;
     }
 
     private bool OnHotkeyPressed(KeyCombination _)
     {
+        if (_hotkeyHeld) return true;
+        _hotkeyHeld = true;
+
         Toggle();
         return true; // Consumed; don't let VS re-handle the press.
+    }
+
+    private void OnKeyUp(KeyEvent e)
+    {
+        if (!_hotkeyHeld) return;
+
+        // Release on the bound key. If the mapping can't be read, any
+        // key release clears the latch so the hotkey can't get stuck.
+        var boundKey = _capi.Input.GetHotKeyByCode(HotkeyCode)?.CurrentMapping?.KeyCode;
+        if (boundKey is null || e.KeyCode == boundKey) _hotkeyHeld = false;
     }
 
     /// <summary>
@@ -93,16 +115,10 @@ internal sealed class EditModeController
         _api.SetEditModeActive(true);
 
         // On entry, re-clamp every registered HUD against the current
-        // screen size. This handles the case where the window was
-        // resized smaller since a position was persisted, and the
-        // persisted position now would land off-screen. Clamping on
-        // entry (rather than on every Register call) avoids work for
-        // mods loaded before the player has resized.
-        var (w, h) = (_capi.Render.FrameWidth, _capi.Render.FrameHeight);
-        foreach (var hud in _api.RegisteredHuds.Values)
-        {
-            hud.SetPositionClamped(hud.CurrentPosition, w, h);
-        }
+        // screen size, in case a position was saved at a larger
+        // resolution. Window resizes while playing are handled by
+        // EditModeRenderer's frame-size check.
+        _api.ReclampAll(_capi.Render.FrameWidth, _capi.Render.FrameHeight);
 
         HudShelfLog.Notification("Edit mode ON.");
     }
@@ -110,6 +126,8 @@ internal sealed class EditModeController
     private void ExitEditMode()
     {
         _state.ExitEditMode();
+        _drag.ClearSelection();
+        _api.PositionStore.Flush();
         _api.SetEditModeActive(false);
 
         HudShelfLog.Notification("Edit mode OFF.");

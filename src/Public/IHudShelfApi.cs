@@ -42,7 +42,7 @@ public interface IHudShelfApi
     /// </summary>
     /// <remarks>
     /// Edit mode is toggled by the user via the <c>hudshelf:editmode</c>
-    /// hotkey (default Ctrl+F10, user-configurable in VS controls).
+    /// hotkey (default Ctrl+F8, user-configurable in VS controls).
     /// </remarks>
     bool IsEditModeActive { get; }
 

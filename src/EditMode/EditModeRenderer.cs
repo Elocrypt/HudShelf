@@ -2,6 +2,7 @@ using HudShelf.Bounds;
 using HudShelf.Drag;
 using HudShelf.Internal;
 using Vintagestory.API.Client;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 
 namespace HudShelf.EditMode;
@@ -21,8 +22,8 @@ namespace HudShelf.EditMode;
 /// <c>1.01</c>. That's above the GuiManager (1.0), which renders all
 /// registered dialogs, and below the crosshair (1.02). Rendering above
 /// the GuiManager ensures the outline is never buried beneath an opaque
-/// dialog background. The early-exit at the top of
-/// <see cref="OnRenderFrame"/> keeps cost zero when edit mode is off.
+/// dialog background. Outside edit mode the only per-frame work is
+/// the window-size check in <see cref="TrackWindowSize"/>.
 /// </remarks>
 internal sealed class EditModeRenderer : IRenderer
 {
@@ -44,7 +45,33 @@ internal sealed class EditModeRenderer : IRenderer
     /// to render a 1×1 texture stretched to the desired size with a
     /// color tint.
     /// </summary>
-    private int _whiteTextureId;
+    /// <remarks>
+    /// Held for the renderer's lifetime and disposed in
+    /// <see cref="Dispose"/>. Dropping the <see cref="LoadedTexture"/>
+    /// leaks the GL texture on every world join and makes its finalizer
+    /// log "Texture ... is leaking memory".
+    /// </remarks>
+    private LoadedTexture? _whiteTexture;
+
+    // Resize detection. VS has no resize event, so the frame size is
+    // compared every frame (two int compares). "Seen" is the latest size,
+    // "applied" the size HUDs were last clamped against.
+    private int _seenW, _seenH;
+    private long _seenAtMs;
+    private int _appliedW, _appliedH;
+
+    // GUI scale positions were last converted to; 0 until the first frame.
+    private double _appliedScale;
+
+    /// <summary>Frame sizes below this are ignored (minimized window).</summary>
+    private const int MinReclampSize = 200;
+
+    /// <summary>
+    /// How long the size must hold before re-clamping. Live window
+    /// resizing passes through many sizes; clamping against an
+    /// intermediate small one would pull HUDs inward for good.
+    /// </summary>
+    private const long ResizeSettleMs = 500;
 
     // Reusable Vec4f buffers — allocated once, mutated per draw to
     // avoid per-frame allocation in the render path.
@@ -58,80 +85,41 @@ internal sealed class EditModeRenderer : IRenderer
         _api = api;
         _state = state;
 
-        _whiteTextureId = CreateWhitePixelTexture(capi);
+        _whiteTexture = CreateWhitePixelTexture(capi);
     }
 
     public void Dispose()
     {
-        // VS owns texture lifetime via the Render API; releasing
-        // explicitly isn't required and there's no public Delete API
-        // for textures created via the surface route. Drop the ref.
-        _whiteTextureId = 0;
+        _whiteTexture?.Dispose();
+        _whiteTexture = null;
     }
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
-        // Zero-cost short-circuit when edit mode is off — this
-        // renderer is registered permanently but does nothing in
-        // Inactive state.
-        if (_state.Phase == DragPhase.Inactive) return;
-        if (_whiteTextureId == 0) return;
-
         var screenW = _capi.Render.FrameWidth;
         var screenH = _capi.Render.FrameHeight;
 
+        TrackGuiScale(screenW, screenH);
+        TrackWindowSize(screenW, screenH);
+
+        // Everything below is edit-mode only.
+        if (_state.Phase == DragPhase.Inactive) return;
+        if (_whiteTexture is null || _whiteTexture.TextureId == 0) return;
+
         // Outline every registered HUD so the user can see what's
         // draggable. Highlight the one being dragged or under cursor.
-        var draggedId = _state.DraggedHud?.Id;
-        var (mouseX, mouseY) = (_capi.Input.MouseX, _capi.Input.MouseY);
-        var hovered = HitTester.Find(mouseX, mouseY, screenW, screenH, _api.RegisteredHuds);
-        var hoveredId = hovered?.Id;
+        var dragged = _state.DraggedHud;
+        var hovered = HitTester.Find(_capi.Input.MouseX, _capi.Input.MouseY, screenW, screenH, _api.HudList);
 
-        foreach (var hud in _api.RegisteredHuds.Values)
+        foreach (var hud in _api.HudList)
         {
-            // Ask the consumer what their visible content size is. This is
-            // the authoritative size for the outline — consumers subtract
-            // dialog padding so the outline hugs the panel, not the full
-            // dialog footprint.
-            double bw, bh;
-            try { (bw, bh) = hud.Registration.GetBounds(); }
-            catch { continue; }
-
-            double l, t, w, h;
-
-            if (bw > 0 && bh > 0 &&
-                HitTester.TryGetHudRect(hud, screenW, screenH,
-                    out var cl, out var ct, out var cw, out var ch))
-            {
-                // Composer footprint is available. Use GetBounds() for size
-                // and center it within the footprint. For dialogs with
-                // symmetric padding (WithFixedPadding), (cw - bw) / 2 equals
-                // the padding in screen pixels, placing the outline exactly at
-                // the visible panel edge. For HUDs with no padding the formula
-                // reduces to (cl, ct), so nothing changes for them.
-                w = bw;
-                h = bh;
-                l = cl + (cw - bw) / 2.0;
-                t = ct + (ch - bh) / 2.0;
-            }
-            else if (bw > 0 && bh > 0)
-            {
-                // Composer bounds unavailable — derive position from the
-                // stored snap position instead.
-                var pos = hud.CurrentPosition;
-                var (anchorX, anchorY) = SnapMath.AnchorScreenPoint(pos.Anchor, screenW, screenH);
-                var (refX, refY) = SnapMath.HudReferencePoint(pos.Anchor, bw, bh);
-                l = anchorX + pos.OffsetX - refX;
-                t = anchorY + pos.OffsetY - refY;
-                w = bw;
-                h = bh;
-            }
-            else
+            if (!TryGetOutlineRect(hud, hud.CurrentPosition, useComposer: true, screenW, screenH,
+                    out var l, out var t, out var w, out var h))
             {
                 continue;
             }
 
-            var color = hud.Id == draggedId || hud.Id == hoveredId
+            var color = ReferenceEquals(hud, dragged) || ReferenceEquals(hud, hovered)
                 ? _hoverColor
                 : _outlineColor;
 
@@ -144,31 +132,98 @@ internal sealed class EditModeRenderer : IRenderer
                 thickness: 2, color);
         }
 
-        // Drag preview: show where the dragged HUD would land if
-        // released right now. Draws as a filled-translucent rect plus
-        // a stronger outline.
+        // Drag preview: where the dragged HUD will land if released now.
+        // Computed from the clamped snap position, not the cursor, so it
+        // matches what the drop produces.
         if (_state.Phase == DragPhase.Dragging &&
-            _state.DraggedHud is { } draggedHud &&
-            _state.PreviewPosition is { } preview)
+            dragged is not null &&
+            _state.PreviewPosition is { } preview &&
+            dragged.TryGetLayoutSize(out var lw, out var lh))
         {
-            // Compute preview rect from the snap-target position, not
-            // the cursor. ClampToScreen gives us the same final
-            // position the drop will produce, so the preview matches
-            // reality.
-            double w, h;
-            try { (w, h) = draggedHud.Registration.GetBounds(); }
-            catch { return; }
-
-            if (w <= 0 || h <= 0) return;
-
-            var clamped = SnapMath.ClampToScreen(preview, w, h, screenW, screenH);
-            var (anchorX, anchorY) = SnapMath.AnchorScreenPoint(clamped.Anchor, screenW, screenH);
-            var (refX, refY) = SnapMath.HudReferencePoint(clamped.Anchor, w, h);
-            var previewLeft = anchorX + clamped.OffsetX - refX;
-            var previewTop = anchorY + clamped.OffsetY - refY;
-
-            DrawRectOutline(previewLeft, previewTop, w, h, thickness: 3, _previewColor);
+            var clamped = SnapMath.ClampToScreen(preview, lw, lh, screenW, screenH);
+            if (TryGetOutlineRect(dragged, clamped, useComposer: false, screenW, screenH,
+                    out var pl, out var pt, out var pw, out var ph))
+            {
+                DrawRectOutline(pl, pt, pw, ph, thickness: 3, _previewColor);
+            }
         }
+    }
+
+    /// <summary>
+    /// Re-clamp all HUDs once the window has settled at a new size, so a
+    /// shrink can't strand a HUD off-screen. Runs whether or not edit
+    /// mode is on. The first settled size is just recorded.
+    /// </summary>
+    private void TrackWindowSize(int screenW, int screenH)
+    {
+        var now = Environment.TickCount64;
+        if (screenW != _seenW || screenH != _seenH)
+        {
+            _seenW = screenW;
+            _seenH = screenH;
+            _seenAtMs = now;
+            return;
+        }
+
+        if (_seenW == _appliedW && _seenH == _appliedH) return;
+        if (now - _seenAtMs < ResizeSettleMs) return;
+        if (screenW < MinReclampSize || screenH < MinReclampSize) return;
+
+        var first = _appliedW == 0;
+        _appliedW = screenW;
+        _appliedH = screenH;
+        if (!first) _api.ReclampAll(screenW, screenH, notifyAll: true);
+    }
+
+    /// <summary>
+    /// Convert positions when the GUI scale setting changes (a float read
+    /// and compare per frame). The first frame only records the scale; the
+    /// startup conversion happened when the API was created.
+    /// </summary>
+    private void TrackGuiScale(int screenW, int screenH)
+    {
+        double scale = RuntimeEnv.GUIScale;
+        if (scale <= 0 || scale == _appliedScale) return;
+
+        var old = _appliedScale;
+        _appliedScale = scale;
+        if (old > 0) _api.ApplyGuiScale(old, scale, screenW, screenH);
+    }
+
+    /// <summary>
+    /// Screen rect of the HUD's visible content (consumer
+    /// <c>GetBounds</c>), centered in its layout footprint. With
+    /// <paramref name="useComposer"/> the footprint is read from the
+    /// composed dialog; otherwise (or if unavailable) it is computed
+    /// from <paramref name="position"/>.
+    /// </summary>
+    /// <remarks>
+    /// Centering the content size in the footprint places the outline at
+    /// the panel edge for dialogs with symmetric padding
+    /// (<c>WithFixedPadding</c>), and reduces to the footprint for HUDs
+    /// without padding.
+    /// </remarks>
+    private static bool TryGetOutlineRect(
+        RegisteredHud hud, HudPosition position, bool useComposer, double screenW, double screenH,
+        out double left, out double top, out double width, out double height)
+    {
+        left = top = 0;
+        if (!hud.TryGetContentSize(out width, out height)) return false;
+
+        double fl, ft, fw, fh;
+        if (useComposer && HitTester.TryGetComposerRect(hud, out fl, out ft, out fw, out fh))
+        {
+            // Composed footprint available.
+        }
+        else
+        {
+            if (!hud.TryGetLayoutSize(out fw, out fh)) return false;
+            (fl, ft) = SnapMath.TopLeft(position, fw, fh, screenW, screenH);
+        }
+
+        left = fl + (fw - width) / 2.0;
+        top = ft + (fh - height) / 2.0;
+        return true;
     }
 
     /// <summary>
@@ -181,15 +236,16 @@ internal sealed class EditModeRenderer : IRenderer
         var t = (float)top;
         var w = (float)width;
         var h = (float)height;
+        var tex = _whiteTexture!.TextureId;
 
         // Top edge.
-        _capi.Render.Render2DTexture(_whiteTextureId, l, t, w, thickness, 50, color);
+        _capi.Render.Render2DTexture(tex, l, t, w, thickness, 50, color);
         // Bottom edge.
-        _capi.Render.Render2DTexture(_whiteTextureId, l, t + h - thickness, w, thickness, 50, color);
+        _capi.Render.Render2DTexture(tex, l, t + h - thickness, w, thickness, 50, color);
         // Left edge (skip the top/bottom thickness already drawn to avoid double-blending corners).
-        _capi.Render.Render2DTexture(_whiteTextureId, l, t + thickness, thickness, h - 2 * thickness, 50, color);
+        _capi.Render.Render2DTexture(tex, l, t + thickness, thickness, h - 2 * thickness, 50, color);
         // Right edge.
-        _capi.Render.Render2DTexture(_whiteTextureId, l + w - thickness, t + thickness, thickness, h - 2 * thickness, 50, color);
+        _capi.Render.Render2DTexture(tex, l + w - thickness, t + thickness, thickness, h - 2 * thickness, 50, color);
     }
 
     /// <summary>
@@ -197,12 +253,10 @@ internal sealed class EditModeRenderer : IRenderer
     /// VS doesn't ship a "draw rect" primitive; the standard idiom is
     /// a stretched 1×1 texture with a color tint.
     /// </summary>
-    private static int CreateWhitePixelTexture(ICoreClientAPI capi)
+    private static LoadedTexture CreateWhitePixelTexture(ICoreClientAPI capi)
     {
         // Use Cairo to create a 1×1 white surface, then upload as a
-        // texture via the standard Gui.LoadOrCreateTexture path. The
-        // texture lives until VS shuts down; for a single 1×1 pixel
-        // that's fine.
+        // texture via the standard Gui.LoadOrUpdateCairoTexture path.
         using var surface = new Cairo.ImageSurface(Cairo.Format.Argb32, 1, 1);
         using (var ctx = new Cairo.Context(surface))
         {
@@ -212,6 +266,6 @@ internal sealed class EditModeRenderer : IRenderer
 
         var loaded = new LoadedTexture(capi);
         capi.Gui.LoadOrUpdateCairoTexture(surface, true, ref loaded);
-        return loaded.TextureId;
+        return loaded;
     }
 }

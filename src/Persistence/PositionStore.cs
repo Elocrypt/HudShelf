@@ -21,6 +21,8 @@ internal sealed class PositionStore
     private readonly string _filePath;
     private readonly Dictionary<string, HudPosition> _cache = new(StringComparer.Ordinal);
     private bool _loaded;
+    private bool _dirty;
+    private double? _guiScale;
 
     public PositionStore(string filePath)
     {
@@ -35,10 +37,82 @@ internal sealed class PositionStore
         return _cache.TryGetValue(hudId, out position);
     }
 
-    public void Set(string hudId, HudPosition position)
+    /// <summary>
+    /// Store a position. With <paramref name="saveNow"/> false the
+    /// write is deferred until <see cref="Flush"/>, so bursts of
+    /// updates (keyboard nudges, re-clamping every HUD after a resize)
+    /// cost one file write instead of one per change.
+    /// </summary>
+    public void Set(string hudId, HudPosition position, bool saveNow = true)
     {
         EnsureLoaded();
         _cache[hudId] = position;
+        _dirty = true;
+        if (saveNow) Flush();
+    }
+
+    /// <summary>
+    /// GUI scale the stored offsets are expressed at, or null if the file
+    /// predates scale tracking.
+    /// </summary>
+    internal double? GuiScale
+    {
+        get
+        {
+            EnsureLoaded();
+            return _guiScale;
+        }
+    }
+
+    /// <summary>
+    /// Bring every stored offset to <paramref name="newScale"/>. Offsets are
+    /// screen pixels, so a GUI scale change multiplies them by
+    /// <c>newScale / oldScale</c>; that keeps each HUD at the same place
+    /// relative to its anchor and its (equally rescaled) neighbours. A
+    /// store with no recorded scale just adopts the new one. Not written
+    /// until <see cref="Flush"/>.
+    /// </summary>
+    public void RescaleTo(double newScale)
+    {
+        EnsureLoaded();
+        if (newScale <= 0) return;
+
+        var old = _guiScale;
+        if (old is > 0 && Math.Abs(old.Value - newScale) > 1e-6)
+        {
+            var factor = newScale / old.Value;
+            foreach (var id in SnapshotKeys())
+            {
+                var p = _cache[id];
+                _cache[id] = p with { OffsetX = p.OffsetX * factor, OffsetY = p.OffsetY * factor };
+            }
+        }
+
+        if (old != newScale)
+        {
+            _guiScale = newScale;
+            _dirty = true;
+        }
+    }
+
+    // Snapshot of the keys so the cache can be updated while iterating.
+    private string[] SnapshotKeys()
+    {
+        var keys = new string[_cache.Count];
+        _cache.Keys.CopyTo(keys, 0);
+        return keys;
+    }
+
+    /// <summary>True when there are changes not yet written to disk.</summary>
+    internal bool IsDirty => _dirty;
+
+    /// <summary>
+    /// Write pending changes to disk. No-op when nothing changed.
+    /// </summary>
+    public void Flush()
+    {
+        if (!_dirty) return;
+        _dirty = false;
         SaveToDisk();
     }
 
@@ -106,6 +180,8 @@ internal sealed class PositionStore
             return;
         }
 
+        _guiScale = dto.GuiScale is > 0 ? dto.GuiScale : null;
+
         if (dto.Huds is null) return;
 
         foreach (var (id, entry) in dto.Huds)
@@ -131,6 +207,7 @@ internal sealed class PositionStore
         var dto = new PositionsFileDto
         {
             Version = CurrentSchemaVersion,
+            GuiScale = _guiScale,
             Huds = BuildEntries(),
         };
 

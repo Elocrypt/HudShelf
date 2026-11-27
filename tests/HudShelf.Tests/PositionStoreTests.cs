@@ -190,4 +190,68 @@ public sealed class PositionStoreTests : IDisposable
             .GetString();
         Assert.Equal("TopRight", anchor);
     }
+
+    [Fact]
+    public void Set_Deferred_DoesNotWriteUntilFlush()
+    {
+        var store = new PositionStore(_filePath);
+        store.Set("mymod:hud", new HudPosition(HudAnchor.TopLeft, 1, 2), saveNow: false);
+
+        Assert.False(File.Exists(_filePath));
+        Assert.True(store.IsDirty);
+
+        store.Flush();
+
+        Assert.True(File.Exists(_filePath));
+        Assert.False(store.IsDirty);
+        var reader = new PositionStore(_filePath);
+        Assert.True(reader.TryGet("mymod:hud", out var pos));
+        Assert.Equal(new HudPosition(HudAnchor.TopLeft, 1, 2), pos);
+    }
+
+    [Fact]
+    public void Flush_WhenClean_DoesNotWrite()
+    {
+        var store = new PositionStore(_filePath);
+        store.Flush();
+        Assert.False(File.Exists(_filePath));
+    }
+
+    [Fact]
+    public void RescaleTo_ScalesOffsetsByScaleRatio()
+    {
+        var store = new PositionStore(_filePath);
+        store.RescaleTo(1.0);
+        store.Set("mymod:hud", new HudPosition(HudAnchor.BottomCenter, 10, -40));
+
+        store.RescaleTo(1.5);
+
+        Assert.True(store.TryGet("mymod:hud", out var pos));
+        Assert.Equal(new HudPosition(HudAnchor.BottomCenter, 15, -60), pos);
+        Assert.Equal(1.5, store.GuiScale);
+    }
+
+    [Fact]
+    public void RescaleTo_WithoutRecordedScale_AdoptsItWithoutScaling()
+    {
+        var store = new PositionStore(_filePath);
+        store.Set("mymod:hud", new HudPosition(HudAnchor.TopLeft, 10, 20));
+
+        store.RescaleTo(2.0);
+
+        Assert.True(store.TryGet("mymod:hud", out var pos));
+        Assert.Equal(new HudPosition(HudAnchor.TopLeft, 10, 20), pos);
+        Assert.Equal(2.0, store.GuiScale);
+    }
+
+    [Fact]
+    public void GuiScale_RoundTripsThroughFile()
+    {
+        var store = new PositionStore(_filePath);
+        store.RescaleTo(1.25);
+        store.Flush();
+
+        var reader = new PositionStore(_filePath);
+        Assert.Equal(1.25, reader.GuiScale);
+    }
 }
